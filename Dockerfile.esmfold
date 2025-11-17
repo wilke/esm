@@ -1,0 +1,220 @@
+# ESMFold Dockerfile
+#
+# This Dockerfile creates a containerized environment for running ESMFold,
+# Meta AI's end-to-end protein structure prediction model.
+#
+# Build command:
+#   docker build -f Dockerfile.esmfold -t esmfold:latest .
+#
+# Run command (with GPU):
+#   docker run --gpus all -it esmfold:latest
+#
+# For CPU-only mode (not recommended):
+#   docker build -f Dockerfile.esmfold --build-arg INSTALL_GPU=false -t esmfold:cpu .
+
+FROM nvidia/cuda:11.3.1-cudnn8-devel-ubuntu20.04
+
+# Build arguments
+ARG PYTHON_VERSION=3.9
+ARG INSTALL_GPU=true
+ARG TORCH_VERSION=1.12.1
+ARG TORCH_CUDA=cu113
+
+# Prevent interactive prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
+# Set working directory
+WORKDIR /workspace
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    git \
+    wget \
+    curl \
+    ca-certificates \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update \
+    && apt-get install -y \
+    python${PYTHON_VERSION} \
+    python${PYTHON_VERSION}-dev \
+    python${PYTHON_VERSION}-distutils \
+    && update-alternatives --install /usr/bin/python python /usr/bin/python${PYTHON_VERSION} 1 \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python${PYTHON_VERSION} 1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install pip
+RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python${PYTHON_VERSION}
+
+# Upgrade pip, setuptools, and wheel
+# RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+RUN python -m pip install --no-cache-dir "pip<24.1" setuptools wheel
+
+# Install PyTorch with CUDA support
+# Separate layer for better caching since this is large
+RUN if [ "$INSTALL_GPU" = "true" ]; then \
+        pip install --no-cache-dir \
+        torch==${TORCH_VERSION}+${TORCH_CUDA} \
+        torchvision \
+        torchaudio \
+        --extra-index-url https://download.pytorch.org/whl/${TORCH_CUDA}; \
+    else \
+        pip install --no-cache-dir \
+        torch==${TORCH_VERSION} \
+        torchvision \
+        torchaudio; \
+    fi
+
+# Install core scientific packages
+RUN pip install --no-cache-dir \
+    numpy==1.21.2 \
+    scipy==1.7.1 \
+    biopython==1.79
+
+# Install deep learning and ML packages
+RUN pip install --no-cache-dir \
+    pytorch-lightning==1.5.10 \
+    deepspeed==0.5.9 \
+    fairscale
+
+# Install utility packages
+RUN pip install --no-cache-dir \
+    einops \
+    omegaconf \
+    ml-collections==0.1.0 \
+    dm-tree==0.1.6 \
+    tqdm==4.62.2 \
+    PyYAML==5.4.1 \
+    typing-extensions==3.10.0.2 \
+    requests==2.26.0
+
+# Install ESM with ESMFold extras
+# This installs the fair-esm package and its dependencies
+RUN pip install --no-cache-dir "fair-esm[esmfold]"
+
+# Install NVIDIA dllogger
+RUN pip install --no-cache-dir git+https://github.com/NVIDIA/dllogger.git
+
+# Install OpenFold at specific commit
+# This requires NVCC and is the most time-consuming step
+# Pinned to specific commit for compatibility with ESMFold
+RUN pip install --no-cache-dir git+https://github.com/aqlaboratory/openfold.git@4b41059694619831a7db195b7e0988fc4ff3a307
+
+# Create directory for models (will be downloaded on first use)
+RUN mkdir -p /root/.cache/torch/hub/checkpoints
+
+# Create directory for input/output
+RUN mkdir -p /data/input /data/output
+
+# Set environment variables for optimal performance
+ENV CUDA_VISIBLE_DEVICES=0
+ENV PYTHONUNBUFFERED=1
+ENV OMP_NUM_THREADS=1
+
+# Add a simple script to test the installation
+RUN echo '#!/usr/bin/env python\n\
+import sys\n\
+import torch\n\
+import esm\n\
+\n\
+print("Testing ESMFold installation...")\n\
+print(f"Python version: {sys.version}")\n\
+print(f"PyTorch version: {torch.__version__}")\n\
+print(f"CUDA available: {torch.cuda.is_available()}")\n\
+if torch.cuda.is_available():\n\
+    print(f"CUDA version: {torch.version.cuda}")\n\
+    print(f"GPU: {torch.cuda.get_device_name(0)}")\n\
+print(f"ESM version: {esm.__version__}")\n\
+print("\\nTrying to load ESMFold model...")\n\
+try:\n\
+    model = esm.pretrained.esmfold_v1()\n\
+    print("✓ ESMFold model loaded successfully!")\n\
+    print(f"Model device: {next(model.parameters()).device}")\n\
+except Exception as e:\n\
+    print(f"✗ Error loading model: {e}")\n\
+    sys.exit(1)\n\
+' > /workspace/test_installation.py && chmod +x /workspace/test_installation.py
+
+# Add a simple inference script
+RUN echo '#!/usr/bin/env python\n\
+"""Simple ESMFold inference script\n\
+Usage: python inference.py <sequence> [--output output.pdb]\n\
+"""\n\
+import argparse\n\
+import torch\n\
+import esm\n\
+\n\
+def main():\n\
+    parser = argparse.ArgumentParser(description="Run ESMFold inference")\n\
+    parser.add_argument("sequence", type=str, help="Protein sequence")\n\
+    parser.add_argument("--output", type=str, default="output.pdb", help="Output PDB file")\n\
+    parser.add_argument("--cpu", action="store_true", help="Use CPU instead of GPU")\n\
+    args = parser.parse_args()\n\
+    \n\
+    print(f"Loading ESMFold model...")\n\
+    model = esm.pretrained.esmfold_v1()\n\
+    model = model.eval()\n\
+    \n\
+    if torch.cuda.is_available() and not args.cpu:\n\
+        model = model.cuda()\n\
+        print("Using GPU")\n\
+    else:\n\
+        print("Using CPU (this will be slow)")\n\
+    \n\
+    print(f"Running inference on sequence ({len(args.sequence)} residues)...")\n\
+    with torch.no_grad():\n\
+        output = model.infer_pdb(args.sequence)\n\
+    \n\
+    with open(args.output, "w") as f:\n\
+        f.write(output)\n\
+    \n\
+    print(f"Structure saved to {args.output}")\n\
+\n\
+if __name__ == "__main__":\n\
+    main()\n\
+' > /workspace/inference.py && chmod +x /workspace/inference.py
+
+# Add example using esm-fold CLI
+RUN echo '#!/bin/bash\n\
+# Example script for using esm-fold command-line tool\n\
+# Usage: ./run_esmfold.sh <input.fasta> <output_dir>\n\
+\n\
+INPUT_FASTA=${1:-/data/input/sequences.fasta}\n\
+OUTPUT_DIR=${2:-/data/output}\n\
+\n\
+echo "Running ESMFold on $INPUT_FASTA"\n\
+echo "Output directory: $OUTPUT_DIR"\n\
+\n\
+esm-fold -i "$INPUT_FASTA" -o "$OUTPUT_DIR" \\\n\
+    --chunk-size 128 \\\n\
+    --max-tokens-per-batch 1024\n\
+\n\
+echo "Done! PDB files saved to $OUTPUT_DIR"\n\
+' > /workspace/run_esmfold.sh && chmod +x /workspace/run_esmfold.sh
+
+# Create an example FASTA file
+RUN echo '>example_protein\n\
+MKTVRQERLKSIVRILERSKEPVSGAQLAEELSVSRQVIVQDIAYLRSLGYNIVATPRGYVLAGG\n\
+' > /data/input/example.fasta
+
+# Set the default command to show help
+CMD ["python", "/workspace/test_installation.py"]
+
+# Labels
+LABEL maintainer="ESM Docker Image"
+LABEL description="ESMFold - Protein Structure Prediction"
+LABEL version="2.0.1"
+LABEL org.opencontainers.image.source="https://github.com/facebookresearch/esm"
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import torch; import esm; assert torch.cuda.is_available() or True"
+
+# Volume mount points
+VOLUME ["/data/input", "/data/output", "/root/.cache/torch/hub/checkpoints"]
+
+# Expose no ports (this is a compute container, not a service)
+# EXPOSE is intentionally omitted

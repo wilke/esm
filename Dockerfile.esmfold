@@ -91,9 +91,10 @@ RUN pip install --no-cache-dir \
     typing-extensions==3.10.0.2 \
     requests==2.26.0
 
-# Install ESM with ESMFold extras
-# This installs the fair-esm package and its dependencies
-RUN pip install --no-cache-dir "fair-esm[esmfold]"
+# Install ESM from source (includes CLI scripts: esm-fold, esm-extract)
+# This will install from the GitHub repository to get the scripts/ directory
+# which contains the CLI entry points that PyPI package doesn't include
+RUN pip install --no-cache-dir git+https://github.com/facebookresearch/esm.git
 
 # Install NVIDIA dllogger
 RUN pip install --no-cache-dir git+https://github.com/NVIDIA/dllogger.git

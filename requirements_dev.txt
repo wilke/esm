@@ -1,0 +1,28 @@
+# Development dependencies
+# Install with: pip install -r requirements_dev.txt
+
+# Include HuggingFace requirements
+-r requirements_hf.txt
+
+# Testing
+pytest>=7.0.0
+pytest-cov
+
+# Code quality
+black
+flake8
+mypy
+
+# Development tools
+ipython
+jupyter
+notebook
+
+# Optional: Original ESMFold dependencies (heavy)
+# deepspeed==0.5.9
+# dm-tree
+# pytorch-lightning
+# omegaconf
+# ml-collections
+# einops
+# scipy

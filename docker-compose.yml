@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  # GPU-enabled ESMFold HuggingFace service
+  esmfold-hf-gpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.hf
+      args:
+        PYTHON_VERSION: "3.10"
+        INSTALL_GPU: "true"
+        TORCH_VERSION: "2.1.0"
+        TORCH_CUDA: "cu121"
+    image: esmfold-hf:latest
+    container_name: esmfold-hf-gpu
+    runtime: nvidia
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - HF_HOME=/root/.cache/huggingface
+      - TRANSFORMERS_CACHE=/root/.cache/huggingface/transformers
+    volumes:
+      # Mount your input/output directories
+      - ./data/input:/data/input
+      - ./data/output:/data/output
+      # Cache HuggingFace models to avoid re-downloading
+      - esmfold-hf-cache:/root/.cache/huggingface
+    command: ["python", "/workspace/test_installation.py"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # CPU-only ESMFold HuggingFace service
+  esmfold-hf-cpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.hf
+      args:
+        PYTHON_VERSION: "3.10"
+        INSTALL_GPU: "false"
+        TORCH_VERSION: "2.1.0"
+    image: esmfold-hf:cpu
+    container_name: esmfold-hf-cpu
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+      - TRANSFORMERS_CACHE=/root/.cache/huggingface/transformers
+    volumes:
+      - ./data/input:/data/input
+      - ./data/output:/data/output
+      - esmfold-hf-cache:/root/.cache/huggingface
+    command: ["python", "/workspace/test_installation.py"]
+
+volumes:
+  # Named volume for HuggingFace model cache
+  esmfold-hf-cache:
+    driver: local
